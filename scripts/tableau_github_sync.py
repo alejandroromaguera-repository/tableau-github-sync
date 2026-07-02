@@ -224,7 +224,7 @@ def main():
   logger.info("=" * 60)
 
   # Autenticar en Tableau Online
-  tableau = TableauAPI(tableau_server, talbeau_site, tableau_user, tableau_password)
+  tableau = TableauAPI(tableau_server, tableau_site, tableau_user, tableau_password)
   if not tableau.authenticate():
     sys.exit(1)
 
