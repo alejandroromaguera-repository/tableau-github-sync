@@ -29,15 +29,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Descargar script de sincronización
-        run: |
-          # Si el script ya está en el repositorio, saltarse este paso
-          if [ ! -f "scripts/tableau_github_sync.py" ]; then
-            mkdir -p scripts
-            curl -o scripts/tableau_github_sync.py https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/tableau_github_sync.py
-            chmod +x scripts/tableau_github_sync.py
-          fi
-
+      #- name: Descargar script de sincronización
+      #  run: |
+      #    # Si el script ya está en el repositorio, saltarse este paso
+      #    if [ ! -f "scripts/tableau_github_sync.py" ]; then
+      #      mkdir -p scripts
+      #      curl -o scripts/tableau_github_sync.py https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/tableau_github_sync.py
+      #      chmod +x scripts/tableau_github_sync.py
+      #    fi
+      
       - name: Ejecutar sincronización Tableau -> GitHub
         env:
           # Credenciales de Tableau Online
