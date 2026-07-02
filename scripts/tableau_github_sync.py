@@ -274,7 +274,7 @@ def main():
       description=f"Se sincronizaron {uploaded_count} workbooks desde Tableau Online"
     )
 
-if __name__ == "__main__";
+if __name__ == "__main__":
   main()
                                  
       
