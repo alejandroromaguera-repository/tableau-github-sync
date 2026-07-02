@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Download workbooks
+tableau_workbooks/
+workbooks(
+*.twbx
+
+# Environment variables
+.env
+*.env
+
