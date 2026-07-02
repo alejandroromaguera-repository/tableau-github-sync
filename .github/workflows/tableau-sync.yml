@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Descargar script de sncronización
+      - name: Descargar script de sincronización
         run: |
           # Si el script ya está en el repositorio, saltarse este paso
           if [ ! -f "scripts/tableau_github_sync.py" ]; then
