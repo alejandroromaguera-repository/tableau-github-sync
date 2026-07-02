@@ -192,7 +192,7 @@ def main():
 
   # Cargar variables de entorno
   tableau_server = os.getenv('TALBEAU_SERVER', 'online.tableau.com')
-  tableau_stie = os.getenv('TABLEAU_SITE', '')
+  tableau_site = os.getenv('TABLEAU_SITE', '')
   tableau_user = os.getenv('TABLEAU_USERNAME', '')
   tableau_password = os.getenv('TABLEAU_PASSWORD', '')
 
