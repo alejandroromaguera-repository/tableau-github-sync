@@ -203,7 +203,7 @@ def main():
   # Validar variables requeridas
   required_vars = [
     ('TABLEAU_SITE', tableau_site),
-    ('TABLEAU_USERNAME', tableau_username),
+    ('TABLEAU_USERNAME', tableau_user),
     ('TABLEAU_PASSWORD', tableau_password),
     ('GITHUB_REPO_OWNER', github_owner),
     ('GITHUB_REPO_NAME', github_repo),
