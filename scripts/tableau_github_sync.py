@@ -32,7 +32,6 @@ class TableauAPI:
       self.user_id = None
       self.base_url = f"https://{server}/api/3.17"
 
-
     def authenticate(self) -> bool:
       """Autenticar en Tableau Online"""
       try:
@@ -59,14 +58,36 @@ class TableauAPI:
         return True
 
       except requests.exceptions.RequestException as e:
-        logger.error(f"x Error al obtener workbooks: {e}")
+        logger.error(f"x Error de autentificación: {e}")
+        return False
+
+    def get_workbooks(self) -> List[dict]:
+    """Obtener lista de workbooks disponibles"""
+      try:
+        headers = {"X-Tableau-Auth": self.token}
+        workbooks_url = f"{self.base_url}/sites/{self.site}/workbooks"
+  
+        response = requests.get(workbooks_url, headers=headers)
+        response.raise_for_status()
+  
+        data = response.json()
+        workbooks = data.get('pagination', {})
+        workbook_list = data.get('workbook', [])
+  
+        logger.info(f"Se encontraron {len(workbook_list)} workbooks")
+        return workbook_list
+
+      except requests.exceptions.RequestException as e:
+        logger.errror(f"x Error al obtener workbooks: {e}")
         return []
 
-    def download_workbook(self, workbook_id: str, workbook_name: str, download_path: str) -> Optional[bytes]:
+    def download_workbook(self, workbook_id: str, workbook_name: str, 
+                          download_path: str) -> Optional[bytes]:
       """Descargar un workbook en formato .twbx"""
       try:
         headers = {"X-Tableau-Auth": self.token}
-        download_url = (f"{self.base_url}/sites/{self.site}/" f"workbooks/{workbook_id}/content")
+        download_url = (f"{self.base_url}/sites/{self.site}/" 
+                        f"workbooks/{workbook_id}/content")
   
         response = requests.get(download_url, headers=headers)
         response.raise_for_status()
@@ -78,9 +99,10 @@ class TableauAPI:
         logger.info(f"Workbook descargado: {workbook_name}.twbx")
         return file_path
   
-    except requests.exceptions.RequestException as e:
-      logger.errror(f"x Error al descargar {workbook_name}: {e}")
-      return None
+      except requests.exceptions.RequestException as e:
+        logger.errror(f"x Error al descargar {workbook_name}: {e}")
+        return None
+
 
 class GitHubAPI:
   """Cliente para la API de GitHub"""
@@ -105,7 +127,8 @@ class GitHubAPI:
       encoded_content = base64.b64encode(file_content).decode('utf-8')
 
       # URL del archivo en GitHub
-      url = (f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}/" f"contents/{github_path}")
+      url = (f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}/" 
+             f"contents/{github_path}")
 
       # Primero, intentar obtneer el SHA del archivo si existe
       sha = None
@@ -138,10 +161,13 @@ class GitHubAPI:
       logger.error(f"x Error al subir a GitHub: {e}")
       return False
 
-  def create_release(self, tag: str, release_name: str, description: str) -> bool:
+  def create_release(self, tag: str, release_name: str, 
+                     description: str) -> bool:
     """Crear una release en GitHub"""
     try: 
-      url = (f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}/" f"releases")
+      url = (f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}/" 
+             f"releases")
+      
       payload = {
         "tag_name": tag,
         "name": release_name,
@@ -149,6 +175,7 @@ class GitHubAPI:
         "draft": False,
         "prerelease": False
       }
+      
       response = requests.post(url, json=payload, headers=self.headers)
       response.raise_for_status()
 
@@ -158,6 +185,7 @@ class GitHubAPI:
     except requests.exceptions.RequestException as e:
       logger.error(f"x Error al crear release: {e}")
       return False
+
 
 def main():
   """Función principal"""
