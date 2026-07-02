@@ -10,7 +10,7 @@ import json
 import base64
 import requests
 from datetime import datetime
-from typping import List,Optional
+from typing import List,Optional
 import logging
 
 # Congifurar logging
