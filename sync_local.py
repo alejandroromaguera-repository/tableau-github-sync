@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import fit
+import git
 
 # Configurar logging
 logging.basicConfig(
