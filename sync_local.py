@@ -174,7 +174,7 @@ def main():
 
   try:
     while True:
-      time_sleep(1)
+      time.sleep(1)
   except KeyboardInterrupt:
     logger.info("\n\n Deteniendo monitor...")
     observer.stop()
