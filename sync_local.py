@@ -57,7 +57,7 @@ class TableauWorkbookHandler(FileSystemEventHandler):
     """Maneja cambios en archivos"""
 
     # Anti-rebote: evita múltiples eventos del mismo archivo
-    current-time = time.time()
+    current_time = time.time()
     if file_path in self.last_action_time:
       if current_time - self.last_action_time[file_path] < self.debounce_time:
         return
