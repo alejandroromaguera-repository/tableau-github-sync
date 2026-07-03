@@ -65,14 +65,43 @@ class TableauWorkbookHandler(FileSystemEventHandler):
     self.last_action_time[file_path] = current_time
 
     file_name = os.path.basename(file_path)
+
+    # Obtener la ruta relativa (para saber en qué carpeta está)
+    rel_path = os.path.relpath(file_path, self.source_path)
+    subfolder = os.path.dirname(rel_path)
+    
     logger.info(f"Archivo {action} : {file_name}")
 
     # Espera un poco a que el archivo se escriba completamente
     time.sleep(1)
 
     try:
-      # Agregar cambios
-      self.repo.index.add([file_path])
+      # Ruta de destino en GitHub
+      if subfolder and subfolder != '.':
+        github_path = os.path.join('workbooks', subfolder, file_name)
+      else:
+        github_path = os.path.join('workbooks', file_name)
+
+      # Normalizar la ruta (Windows usa \, Git usa /)
+      github_path = github_path.replace('\\','/')
+
+      # Crear directorio en GitHub si no existe
+      github_dir = os.path.dirname(os.path.join(self.repo_path, github_path))
+      os.makedirs(github_dir, exist_ok = True)
+
+      # Copiar archivo a la ubicación del repositorio
+      dest_file = os.path.join(self.repo_path, github_path)
+
+      if action == "eliminado":
+        # Si el archivo fue eliminado localmente, también eliminarlo en GitHub 
+        if os.path.exists(dest_file):
+          os.remove(dest_file)
+          self.repo.index.remove([github_path])
+      else:
+        #Copiar archivo
+        import shutil
+        shutil.copy2(file_path, dest_file)
+        self.repo.index.add([github_path])
 
       # Crear comit
       timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -93,20 +122,30 @@ class TableauWorkbookHandler(FileSystemEventHandler):
     except Exception as e:
       logger.error(f"x Error al procesar cambio: {e}")
 
+def get_documents_path():
+  """Obtiene la ruta de la carpeta Documentos según el sistema operativo"""
+  if sys.platform=='win32':
+    return os.path.join(os.path.expanduser('-'), 'Documents', 'Tableau Workbooks')
+
 def main():
   """Función principal"""
 
   # Obtener ruta del repositorio
   repo_path = os.getcwd()
-  workbooks_path = os.path.join(repo_path, 'workbooks')
+  source_path = get_documents_path()
 
   logger.info("=" * 60)
-  logger.info("Monitor de Workbooks - Tableau <-> GitHub")
+  logger.info("Monitor de Workbooks - Tableau <-> GitHub (con subcarpetas)")
   logger.info("=" * 60)
-  logger.info(f"Carpeta monitoreada: {workbooks_path}")
+  logger.info(f"Carpeta monitoreada: {source_path}")
   logger.info(f"Repositorio: {repo_path}")
+  logger.info(f"Destino GitHub: workbooks/<subcarpeta>/")
   logger.info("")
-  logger.info("Esperando cambios en la carpeta workbooks/...")
+  logger.info("Estructura soportada:")
+  logger.info("Documentos/Tableau Workbooks/")
+  logger.info(" |--- Stangest")
+  logger.info("")
+  logger.info("Esperando cambios...")
   logger.info("Presiona Ctrl+C para detener")
   logger.info("=" * 60)
 
@@ -120,15 +159,15 @@ def main():
     sys.exit(1)
 
   # Verificar que la carpeta workbooks existe
-  if not os.path.exists(workbooks_path):
-    logger.warning(f"La carpeta {workbooks_path} no existe")
+  if not os.path.exists(source_path):
+    logger.warning(f"La carpeta {source_path} no existe")
     logger.info(f"Creando carpeta...")
-    os.makedirs(workbooks_path, exist_ok=True)
+    os.makedirs(source_path, exist_ok=True)
 
   # Crear observador
   event_handler = TableauWorkbookHandler(repo_path)
   observer = Observer()
-  observer.schedule(event_handler, workbooks_path, recursive=False)
+  observer.schedule(event_handler, source_path, recursive=False)
 
   # Iniciar monitoreo
   observer.start()
