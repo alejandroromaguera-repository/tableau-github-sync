@@ -40,7 +40,7 @@ class TableauWorkbookHandler(FileSystemEventHandler):
   def on_created(self, event):
     if event.is_directory:
       return
-    if not event.src_path.endswith('.twbx')
+    if not event.src_path.endswith('.twbx'):
       return
 
     self._handle_change(event.src_path, "creado")
@@ -48,7 +48,7 @@ class TableauWorkbookHandler(FileSystemEventHandler):
   def on_deleted(self, event):
     if event.is_directory:
       return
-    if not event.src_path.endswith('.twbx')
+    if not event.src_path.endswith('.twbx'):
       return
 
     self._handle_change(event.src_path, "eliminado")
