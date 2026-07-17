@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 """
 Script CORREGIDO para descargar workbooks de Tableau usando:
 1. SQL PLUS (ejecuta consulta, genera lista_workbooks.txt en formato CSV)
@@ -22,6 +20,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
+import re
 
 try:
     import tableauserverclient as TSC
@@ -190,81 +189,107 @@ def ejecutar_sqlplus(comando_sqlplus, timeout=15):
         return False
 
 
-def esperar_archivo(ruta_archivo, timeout=15, intervalo=1):
-    """Espera a que se genere el archivo"""
-    logger.info("[ESPERANDO] Archivo: %s", ruta_archivo)
-    
-    inicio = time.time()
-    ruta = Path(ruta_archivo)
-    
-    while time.time() - inicio < timeout:
-        if ruta.exists():
-            tamaño = ruta.stat().st_size
-            logger.info("[OK] Archivo encontrado (%d bytes)", tamaño)
-            time.sleep(2)
-            return True
-        
-        tiempo_transcurrido = int(time.time() - inicio)
-        logger.info("[ESPERANDO] %d/%d segundos...", tiempo_transcurrido, timeout)
-        time.sleep(intervalo)
-    
-    logger.error("[ERROR] Archivo no generado después de %d segundos", timeout)
-    return False
-
-
 def parsear_lista_workbooks(ruta_archivo, separador=','):
     """
     Parsea archivo CSV/TSV/PIPE generado por SQL PLUS
     """
     
+    ruta = Path(ruta_archivo)
+
     try:
-        logger.info("[PARSEANDO] Archivo: %s", ruta_archivo)
-        logger.info("[PARSEANDO] Separador: %r", separador)
+        logger.info("[PARSEANDO] Archivo: %s",ruta)
+        logger.info("[PARSEANDO] Separador: %r",separador)
+
+        if not ruta.is_file():
+            logger.error("[ERROR] El archivo no existe: %s",ruta)
+            return None
+
+        if ruta.stat().st_size == 0:
+            logger.error("[ERROR] El archivo está vacío: %s",ruta)
+            return None
+
+        df = pd.read_csv(ruta,sep=separador,dtype=str,encoding ='utf-8',quotechar='"',keep_default_na=False,skipinitialspace=True)
+
+        # Limpiar y normalizar los encabezados.
+        df.columns = [str(columna).strip().upper()for columna in df.columns]
+
+        # Limpiar espacios de todos los valores.
+        for columna in df.columns:
+            df[columna] = (df[columna].astype(str).str.strip())
+
+        columnas_requeridas = {
+            "WORKBOOK_LUID",
+            "WORKBOOK"
+        }
+
+        columnas_faltantes = (columnas_requeridas - set(df.columns))
+
+        if columnas_faltantes:
+            logger.error(
+                "[ERROR] Faltan columnas requeridas: %s",
+                ", ".join(
+                    sorted(columnas_faltantes)
+                )
+            )
+            logger.error(
+                "[INFO] Columnas disponibles: %s",
+                ", ".join(df.columns)
+            )
+            return None
+
+        if "RUTA_PROYECTO" not in df.columns:
+            logger.warning(
+                "[AVISO] RUTA_PROYECTO no encontrada. "
+                "Se utilizará 'default'"
+            )
+            df["RUTA_PROYECTO"] = "default"
+
+        if "RUTA_LOCAL_DESTINO" not in df.columns:
+            logger.warning(
+                "[AVISO] RUTA_LOCAL_DESTINO no encontrada"
+            )
+            df["RUTA_LOCAL_DESTINO"] = ""
+
+        # Eliminar filas sin identificador o nombre.
+        df = df[
+            (df["WORKBOOK_LUID"] != "")
+            & (df["WORKBOOK"] != "")
+        ]
+
+        # Evitar descargas duplicadas.
+        df = df.drop_duplicates(subset=["WORKBOOK_LUID"],keep="last")
         
-        # Leer como CSV
-        df = pd.read_csv(
-            ruta_archivo,
-            sep=separador,
-            skipinitialspace=True,
-            dtype=str,
-            encoding='utf-8'
+        df = df.reset_index(drop=True)
+
+        logger.info(
+            "[OK] Workbooks válidos: %d",
+            len(df)
         )
-        
-        # Limpiar espacios en blanco
-        df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
-        
-        logger.info("[OK] Parseado: %d workbooks", len(df))
-        logger.info("[COLUMNAS] %s", ", ".join(df.columns))
-        
-        # Validar columnas requeridas
-        columnas_requeridas = ['WORKBOOK_LUID', 'WORKBOOK']
-        
-        for col in columnas_requeridas:
-            if col not in df.columns:
-                logger.error("[ERROR] Columna requerida no encontrada: %s", col)
-                logger.error("[INFO] Columnas disponibles: %s", ", ".join(df.columns))
-                logger.error("")
-                logger.error("Verifica tu archivo Descarga.sql:")
-                logger.error("- ¿Están todas las columnas en el SELECT?")
-                logger.error("- ¿El separador (SET COLSEP) es el correcto?")
-                return None
-        
-        # Si falta RUTA_PROYECTO, usar default
-        if 'RUTA_PROYECTO' not in df.columns:
-            logger.warning("[AVISO] RUTA_PROYECTO no encontrada, usando 'default'")
-            df['RUTA_PROYECTO'] = 'default'
-        
-        logger.info("[OK] DataFrame validado")
+        logger.info(
+            "[COLUMNAS] %s",
+            ", ".join(df.columns)
+        )
+
         return df
-        
-    except Exception as e:
-        logger.error("[ERROR] Error parseando archivo: %s", e)
-        logger.error("")
-        logger.error("Posibles causas:")
-        logger.error("- El archivo no existe")
-        logger.error("- El archivo está vacío")
-        logger.error("- El separador (--separador) es incorrecto")
-        logger.error("- El archivo tiene formato incorrecto")
+
+    except UnicodeDecodeError:
+        logger.exception(
+            "[ERROR] La codificación del archivo "
+            "no coincide con encoding_lista"
+        )
+        return None
+
+    except pd.errors.ParserError:
+        logger.exception(
+            "[ERROR] El archivo no tiene un "
+            "formato CSV válido"
+        )
+        return None
+
+    except Exception:
+        logger.exception(
+            "[ERROR] No se pudo parsear el archivo"
+        )
         return None
 
 
@@ -491,30 +516,33 @@ def main():
     # Cargar y validar configuración
     logger.info("[CARGANDO] Configuración...")
     config = cargar_config(args.config)
+    comando = config['sqlplus_comando']
+    timeout = config.get('timeout_sqlplus', 15)
+    archivo_lista = Path(config['archivo_lista_workbooks'])
     
     directorio_base = config.get('directorio_descarga', './tableau_workbooks')
     
-    # PASO 1: Ejecutar SQL PLUS
+    # PASO 1: Eliminar lista_workbooks.csv anterior
     logger.info("="*60)
-    logger.info("PASO 1: EJECUTAR SQL PLUS")
+    logger.info("PASO 1: ELIMINAR LISTA ANTERIOR")
     logger.info("="*60)
-    
-    comando = config['sqlplus_comando']
-    timeout = config.get('timeout_sqlplus', 15)
+
+    try:
+        if archivo_lista.exists():
+            archivo_lista.unlink()
+            logger.info("[OK] Archivo anterior eliminado :%s",archivo_lista)
+        else:
+            logger.info("[INFO] No había un archivo anterior que eliminar")
+    except OSError as error:
+        logger.error("[FATAL] No se pudo eliminar el archivo anterior %s: %s", archivo_lista, error)
+
+    # PASO 2: Ejecutar SQL PLUS
+    logger.info("="*60)
+    logger.info("PASO 2: EJECUTAR SQL PLUS")
+    logger.info("="*60)
     
     if not ejecutar_sqlplus(comando, timeout):
         logger.error("[FATAL] No se pudo ejecutar SQL PLUS")
-        sys.exit(1)
-    
-    # PASO 2: Esperar archivo
-    logger.info("="*60)
-    logger.info("PASO 2: ESPERAR ARCHIVO")
-    logger.info("="*60)
-    
-    archivo_lista = config['archivo_lista_workbooks']
-    
-    if not esperar_archivo(archivo_lista, timeout):
-        logger.error("[FATAL] El archivo no se generó")
         sys.exit(1)
     
     # PASO 3: Parsear archivo
