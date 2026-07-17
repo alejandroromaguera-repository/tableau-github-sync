@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""
-Script dual: Lee estructura de workbooks desde EXCEL o ORACLE
-Descarga workbooks de Tableau y los sube a GitHub
 
-Uso:
-    python descargar_workbooks_excel_oracle.py
-    python descargar_workbooks_excel_oracle.py --forzar-excel
-    python descargar_workbooks_excel_oracle.py --sin-github
+"""
+Script CORREGIDO para descargar workbooks de Tableau usando:
+1. SQL PLUS (ejecuta consulta, genera lista_workbooks.txt en formato CSV)
+2. Python (parsea CSV, descarga workbooks, sube a GitHub)
+
+CORRECCIONES v2:
+- Validación robusta de config.json
+- Mensajes de error claros
+- Manejo seguro de variables faltantes
 """
 
 import os
@@ -16,30 +18,22 @@ import logging
 import subprocess
 import argparse
 import shutil
+import time
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
- 
-# Importar librerías Tableau
+
 try:
     import tableauserverclient as TSC
 except ImportError:
     print("ERROR: tableauserverclient no está instalado")
     print("Instala con: pip install tableauserverclient")
     sys.exit(1)
- 
-# Para Oracle (opcional)
-try:
-    import oracledb
-    ORACLE_AVAILABLE = True
-except ImportError:
-    ORACLE_AVAILABLE = False
-    print("ADVERTENCIA: oracledb no instalado (Excel funcionará igual)")
- 
+
 # ============================================================================
-# LOGGING
+# CONFIGURACIÓN DE LOGGING
 # ============================================================================
- 
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -49,276 +43,257 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
- 
+
 # ============================================================================
-# CARGAR CONFIGURACIÓN
+# FUNCIONES DE VALIDACIÓN
 # ============================================================================
- 
+
+def validar_config(config):
+    """Valida que el config.json tenga todas las claves necesarias"""
+    
+    logger.info("="*60)
+    logger.info("VALIDANDO CONFIGURACIÓN")
+    logger.info("="*60)
+    
+    # Claves requeridas para SQL PLUS
+    claves_sqlplus_requeridas = [
+        'sqlplus_comando',
+        'archivo_lista_workbooks'
+    ]
+    
+    # Claves requeridas para Tableau
+    claves_tableau_requeridas = [
+        'tableau_server',
+        'tableau_token_name',
+        'tableau_token',
+        'tableau_site'
+    ]
+    
+    # Claves opcionales con valores por defecto
+    claves_opcionales = {
+        'directorio_descarga': './tableau_workbooks',
+        'timeout_sqlplus': 15,
+        'github_enabled': True
+    }
+    
+    # VALIDAR CLAVES SQL PLUS
+    logger.info("[VERIFICANDO] Claves SQL PLUS...")
+    for clave in claves_sqlplus_requeridas:
+        if clave not in config:
+            logger.error("[ERROR] Clave REQUERIDA no encontrada: %s", clave)
+            logger.error("[ERROR] Claves disponibles: %s", ", ".join(config.keys()))
+            logger.error("")
+            logger.error("Por favor, agrega estas claves a tu config.json:")
+            for c in claves_sqlplus_requeridas:
+                if c not in config:
+                    logger.error('  "%s": "...",', c)
+            sys.exit(1)
+        else:
+            logger.info(" %s encontrada", clave)
+    
+    # VALIDAR CLAVES TABLEAU
+    logger.info("[VERIFICANDO] Claves Tableau...")
+    for clave in claves_tableau_requeridas:
+        if clave not in config:
+            logger.error("[ERROR] Clave REQUERIDA no encontrada: %s", clave)
+            logger.error("[ERROR] Claves disponibles: %s", ", ".join(config.keys()))
+            logger.error("")
+            logger.error("Por favor, agrega estas claves a tu config.json:")
+            for c in claves_tableau_requeridas:
+                if c not in config:
+                    logger.error('  "%s": "...",', c)
+            sys.exit(1)
+        else:
+            logger.info(" %s encontrada", clave)
+    
+    # CLAVES OPCIONALES
+    logger.info("[VERIFICANDO] Claves opcionales...")
+    for clave, valor_default in claves_opcionales.items():
+        if clave not in config:
+            logger.info("  %s no encontrada, usando default: %s", clave, valor_default)
+            config[clave] = valor_default
+        else:
+            logger.info(" %s encontrada", clave)
+    
+    logger.info("[OK] Configuración validada correctamente")
+    logger.info("")
+    return config
+
+
+# ============================================================================
+# FUNCIONES PRINCIPALES
+# ============================================================================
+
 def cargar_config(config_file="config.json"):
-    """Carga la configuración desde JSON"""
+    """Carga y valida la configuración desde JSON"""
     try:
         with open(config_file, 'r') as f:
             config = json.load(f)
-        logger.info("[OK] Configuración cargada correctamente")
+        logger.info("[OK] Archivo %s cargado", config_file)
+        
+        # VALIDAR CONFIGURACIÓN
+        config = validar_config(config)
+        
         return config
     except FileNotFoundError:
         logger.error("[ERROR] Archivo %s no encontrado", config_file)
+        logger.error("")
+        logger.error("Debes crear un archivo config.json con este contenido:")
+        logger.error("")
+        logger.error("""{
+  "tableau_server": "https://tu_tableau_server.com",
+  "tableau_token_name": "tu_nombre_del_token",
+  "tableau_token": "tu_token_aqui",
+  "tableau_site": "default",
+  
+  "directorio_descarga": "./tableau_workbooks",
+  "github_enabled": true,
+  
+  "sqlplus_comando": "cd C:\\\\oracle\\\\instantclient_23_0 && sqlplus -S usuario/password@servidor:1521/SID @C:\\\\tabcmd\\\\TableauGitHub\\\\Descarga.sql",
+  "archivo_lista_workbooks": "C:\\\\tabcmd\\\\TableauGitHub\\\\lista_workbooks.txt",
+  "timeout_sqlplus": 15
+}""")
         sys.exit(1)
     except json.JSONDecodeError:
-        logger.error("[ERROR] Error al parsear %s", config_file)
+        logger.error("[ERROR] Error al parsear %s (JSON inválido)", config_file)
         sys.exit(1)
- 
-# ============================================================================
-# LEER DATOS DESDE EXCEL
-# ============================================================================
- 
-def leer_archivo_datos(ruta_archivo):
-    """
-    Lee el archivo de datos (Excel o DSV)
-    Detecta automáticamente el formato por extensión
-    
-    Retorna DataFrame con columnas:
-    - WORKBOOK_LUID
-    - WORKBOOK
-    - RUTA_PROYECTO
-    - RUTA_LOCAL_DESTINO
-    - OWNER_EMAIL
-    - ULTIMA_ACTUALIZACION
-    - TIPO_ITEM
-    - DESCARGAR (si existe)
-    """
+
+
+def ejecutar_sqlplus(comando_sqlplus, timeout=15):
+    """Ejecuta comando SQL PLUS"""
     try:
-        logger.info("[LEYENDO] Archivo: %s", ruta_archivo)
+        logger.info("[SQLPLUS] Ejecutando comando...")
+        logger.info("[SQLPLUS] Timeout: %d segundos", timeout)
         
-        extension = Path(ruta_archivo).suffix.lower()
-        
-        # Detectar formato y leer
-        if extension == '.dsv':
-            # DSV: usa coma como separador, con comillas
-            # doublequote=True maneja comillas dentro de valores
-            df = pd.read_csv(ruta_archivo, sep=',', quotechar='"', doublequote=True, skipinitialspace=True, on_bad_lines='skip')
-        elif extension in ['.xlsx', '.xls']:
-            # Excel
-            df = pd.read_excel(ruta_archivo)
-        elif extension == '.csv':
-            # CSV: usa coma como separador
-            df = pd.read_csv(ruta_archivo, sep=',', quotechar='"', doublequote=True, skipinitialspace=True, on_bad_lines='skip')
-        else:
-            # Por defecto intentar como CSV con coma
-            logger.warning("[AVISO] Extension no reconocida, intentando como TXT")
-            df = pd.read_csv(ruta_archivo, sep='\t', quotechar='"', doublequote=True, skipinitialspace=True, on_bad_lines='skip')
-        
-        # Limpiar espacios y comillas de nombres de columnas
-        df.columns = [col.strip().replace('"', '') for col in df.columns]
-        
-        # Limpiar comillas de TODOS los valores (strings)
-        for col in df.columns:
-            if df[col].dtype == 'object':  # Solo si es texto
-                df[col] = df[col].astype(str).str.replace('"', '', regex=False).str.strip()
-        
-        logger.info("[OK] Archivo cargado: %d filas", len(df))
-        logger.info("[INFO] Columnas encontradas: %s", ", ".join(df.columns))
-        
-        # Buscar columnas de forma flexible (sin importar espacios/comillas)
-        def buscar_columna(df, patrones):
-            """Busca una columna que contenga uno de los patrones (búsqueda exacta primero)"""
-            # Primero intentar coincidencia exacta
-            for col in df.columns:
-                col_limpio = col.strip().upper().replace('"', '')
-                for patron in patrones:
-                    if col_limpio == patron.upper():
-                        logger.info("[MAPEO] Columna '%s' mapeada a '%s' (coincidencia exacta)", col, patron)
-                        return col
-            
-            # Si no encuentra exacta, buscar parcial
-            for col in df.columns:
-                col_limpio = col.strip().upper().replace('"', '')
-                for patron in patrones:
-                    patron_upper = patron.upper()
-                    # Buscar el patrón pero evitar falsas coincidencias
-                    if patron_upper in col_limpio:
-                        # Si buscamos "WORKBOOK" evitar "WORKBOOK_LUID"
-                        if patron_upper == 'WORKBOOK' and 'LUID' in col_limpio:
-                            continue
-                        # Si buscamos "RUTA" evitar "RUTA_LOCAL_DESTINO"
-                        if patron_upper == 'RUTA' and 'LOCAL' in col_limpio:
-                            continue
-                        logger.info("[MAPEO] Columna '%s' mapeada a '%s' (coincidencia parcial)", col, patron)
-                        return col
-            return None
-        
-        # Mapear columnas (buscar primero las más específicas)
-        col_luid = buscar_columna(df, ['WORKBOOK_LUID', 'LUID'])
-        col_nombre = buscar_columna(df, ['WORKBOOK'])
-        col_ruta = buscar_columna(df, ['RUTA_PROYECTO', 'PROYECTO', 'RUTA'])
-        col_descargar = buscar_columna(df, ['DESCARGAR', 'DOWNLOAD'])
-        
-        if not col_luid:
-            logger.error("[ERROR] No se encontró columna WORKBOOK_LUID (o similar)")
-            logger.error("[INFO] Columnas disponibles: %s", ", ".join(df.columns))
-            sys.exit(1)
-        if not col_nombre:
-            logger.error("[ERROR] No se encontró columna WORKBOOK")
-            sys.exit(1)
-        if not col_ruta:
-            logger.error("[ERROR] No se encontró columna RUTA_PROYECTO")
-            sys.exit(1)
-        
-        # Renombrar columnas para que sean estándar
-        df = df.rename(columns={
-            col_luid: 'WORKBOOK_LUID',
-            col_nombre: 'WORKBOOK',
-            col_ruta: 'RUTA_PROYECTO'
-        })
-        
-        # Filtrar solo si DESCARGAR=True
-        if col_descargar:
-            df = df.rename(columns={col_descargar: 'DESCARGAR'})
-            df = df[df['DESCARGAR'].astype(str).str.upper().isin(['SÍ', 'SI', '1', 'TRUE'])]
-            logger.info("[FILTRADO] Workbooks para descargar: %d", len(df))
-        
-        return df
-    except Exception as e:
-        logger.error("[ERROR] Error al leer archivo: %s", e)
-        sys.exit(1)
- 
-# ============================================================================
-# CONECTAR A ORACLE
-# ============================================================================
- 
-def conectar_oracle(config):
-    """Conecta a Oracle y obtiene la estructura de workbooks"""
-    
-    if not ORACLE_AVAILABLE:
-        logger.error("[ERROR] oracledb no está instalado")
-        sys.exit(1)
-    
-    try:
-        logger.info("[CONECTANDO] Oracle...")
-        
-        # Usar wallet si está configurado
-        if config.get('oracle_wallet_location'):
-            oracledb.init_oracle_client(
-                wallet_location=config['oracle_wallet_location'],
-                wallet_password=config.get('oracle_wallet_password', '')
-            )
-        
-        # Conectar
-        conexion = oracledb.connect(
-            user=config['oracle_user'],
-            password=config['oracle_password'],
-            dsn=config['oracle_dsn']
+        resultado = subprocess.run(
+            comando_sqlplus,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
         )
         
-        logger.info("[OK] Conectado a Oracle")
+        if resultado.returncode != 0:
+            logger.error("[ERROR] SQL PLUS error (código %d)", resultado.returncode)
+            logger.error("[ERROR] stderr: %s", resultado.stderr[:500])
+            return False
         
-        # Ejecutar query
-        cursor = conexion.cursor()
+        logger.info("[OK] Comando ejecutado correctamente")
+        return True
         
-        query = """
-        SELECT 
-            WORKBOOK_LUID,
-            WORKBOOK,
-            RUTA_PROYECTO,
-            RUTA_LOCAL_DESTINO,
-            OWNER_EMAIL,
-            ULTIMA_ACTUALIZACION,
-            TIPO_ITEM
-        FROM tu_tabla_workbooks
-        WHERE DESCARGAR = 1
-        """
+    except subprocess.TimeoutExpired:
+        logger.error("[ERROR] SQL PLUS timeout (>%d segundos)", timeout)
+        logger.error("[ERROR] El comando tardó demasiado. Aumenta timeout_sqlplus en config.json")
+        return False
+    except Exception as e:
+        logger.error("[ERROR] Error ejecutando SQL PLUS: %s", e)
+        return False
+
+
+def esperar_archivo(ruta_archivo, timeout=15, intervalo=1):
+    """Espera a que se genere el archivo"""
+    logger.info("[ESPERANDO] Archivo: %s", ruta_archivo)
+    
+    inicio = time.time()
+    ruta = Path(ruta_archivo)
+    
+    while time.time() - inicio < timeout:
+        if ruta.exists():
+            tamaño = ruta.stat().st_size
+            logger.info("[OK] Archivo encontrado (%d bytes)", tamaño)
+            time.sleep(2)
+            return True
         
-        cursor.execute(query)
-        columnas = [desc[0] for desc in cursor.description]
-        filas = cursor.fetchall()
+        tiempo_transcurrido = int(time.time() - inicio)
+        logger.info("[ESPERANDO] %d/%d segundos...", tiempo_transcurrido, timeout)
+        time.sleep(intervalo)
+    
+    logger.error("[ERROR] Archivo no generado después de %d segundos", timeout)
+    return False
+
+
+def parsear_lista_workbooks(ruta_archivo, separador=','):
+    """
+    Parsea archivo CSV/TSV/PIPE generado por SQL PLUS
+    """
+    
+    try:
+        logger.info("[PARSEANDO] Archivo: %s", ruta_archivo)
+        logger.info("[PARSEANDO] Separador: %r", separador)
         
-        cursor.close()
-        conexion.close()
+        # Leer como CSV
+        df = pd.read_csv(
+            ruta_archivo,
+            sep=separador,
+            skipinitialspace=True,
+            dtype=str,
+            encoding='utf-8'
+        )
         
-        # Convertir a DataFrame
-        df = pd.DataFrame(filas, columns=columnas)
-        logger.info("[OK] Oracle: %d workbooks encontrados", len(df))
+        # Limpiar espacios en blanco
+        df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
         
+        logger.info("[OK] Parseado: %d workbooks", len(df))
+        logger.info("[COLUMNAS] %s", ", ".join(df.columns))
+        
+        # Validar columnas requeridas
+        columnas_requeridas = ['WORKBOOK_LUID', 'WORKBOOK']
+        
+        for col in columnas_requeridas:
+            if col not in df.columns:
+                logger.error("[ERROR] Columna requerida no encontrada: %s", col)
+                logger.error("[INFO] Columnas disponibles: %s", ", ".join(df.columns))
+                logger.error("")
+                logger.error("Verifica tu archivo Descarga.sql:")
+                logger.error("- ¿Están todas las columnas en el SELECT?")
+                logger.error("- ¿El separador (SET COLSEP) es el correcto?")
+                return None
+        
+        # Si falta RUTA_PROYECTO, usar default
+        if 'RUTA_PROYECTO' not in df.columns:
+            logger.warning("[AVISO] RUTA_PROYECTO no encontrada, usando 'default'")
+            df['RUTA_PROYECTO'] = 'default'
+        
+        logger.info("[OK] DataFrame validado")
         return df
         
     except Exception as e:
-        logger.error("[ERROR] Error al conectar Oracle: %s", e)
-        raise
- 
-# ============================================================================
-# OBTENER DATOS INTELIGENTE (ORACLE + FALLBACK EXCEL)
-# ============================================================================
- 
-def obtener_datos_inteligente(config):
-    """
-    Intenta obtener datos de Oracle primero.
-    Si falla, cae automáticamente a Excel (backup) en la misma ruta del script.
+        logger.error("[ERROR] Error parseando archivo: %s", e)
+        logger.error("")
+        logger.error("Posibles causas:")
+        logger.error("- El archivo no existe")
+        logger.error("- El archivo está vacío")
+        logger.error("- El separador (--separador) es incorrecto")
+        logger.error("- El archivo tiene formato incorrecto")
+        return None
+
+
+def limpiar_directorio(directorio_base):
+    """Limpia y recrea directorio"""
+    logger.info("="*60)
+    logger.info("LIMPIEZA DE DIRECTORIO")
+    logger.info("="*60)
     
-    Retorna:
-        DataFrame con los datos y tipo de fuente (oracle/excel)
-    """
+    ruta = Path(directorio_base)
     
-    fuente_datos = None
-    df = None
-    
-    # ========== PASO 1: INTENTAR ORACLE ==========
-    logger.info("[INTENTANDO] Conectar a Oracle...")
-    
-    if not ORACLE_AVAILABLE:
-        logger.warning("[AVISO] oracledb no está instalado - saltando Oracle")
-    else:
+    if ruta.exists():
+        logger.info("[LIMPIANDO] Eliminando directorio: %s", directorio_base)
         try:
-            df = conectar_oracle(config)
-            fuente_datos = 'oracle'
-            logger.info("[EXITO] Datos obtenidos desde ORACLE")
-            return df, fuente_datos
+            shutil.rmtree(directorio_base)
+            logger.info("[OK] Directorio eliminado")
         except Exception as e:
-            logger.warning("[AVISO] Oracle fallo: %s", str(e)[:100])
-            logger.info("[FALLBACK] Cayendo a Excel de respaldo...")
-    
-    # ========== PASO 2: FALLBACK A ARCHIVO DE DATOS ==========
-    logger.info("[BUSCANDO] Archivo de datos de respaldo...")
-    
-    directorio_script = Path(__file__).parent
-    
-    # Buscar archivo "prueba" con cualquier extensión (.dsv, .xlsx, .csv, etc)
-    archivos_prueba = []
-    
-    # Buscar todos los archivos que empiezan con "prueba" (case-insensitive)
-    for archivo in directorio_script.glob('prueba*'):
-        if archivo.is_file():
-            archivos_prueba.append(archivo)
-    
-    if not archivos_prueba:
-        logger.error("[ERROR] No se encontró archivo 'prueba' en la carpeta del script")
-        logger.error("[INFO] Ubicacion: %s", directorio_script)
-        logger.error("[ACCION] Coloca un archivo llamado 'prueba' (prueba.dsv, prueba.xlsx, prueba.csv, etc)")
-        sys.exit(1)
-    
-    # Si hay múltiples archivos "prueba", usar el más reciente
-    archivo_datos = sorted(archivos_prueba, key=lambda x: x.stat().st_mtime, reverse=True)[0]
-    
-    if not archivo_datos.exists():
-        logger.error("[ERROR] Archivo de datos no encontrado: %s", archivo_datos)
-        sys.exit(1)
-    
-    logger.info("[USANDO] Archivo de datos: %s", archivo_datos.name)
+            logger.error("[ERROR] Error al eliminar: %s", e)
     
     try:
-        df = leer_archivo_datos(str(archivo_datos))
-        fuente_datos = 'archivo_datos'
-        logger.info("[EXITO] Datos obtenidos desde archivo de datos (respaldo)")
-        return df, fuente_datos
+        Path(directorio_base).mkdir(parents=True, exist_ok=True)
+        logger.info("[OK] Directorio recreado: %s", directorio_base)
     except Exception as e:
-        logger.error("[ERROR] Error al leer archivo de datos: %s", e)
+        logger.error("[ERROR] No se pudo recrear directorio: %s", e)
         sys.exit(1)
- 
-# ============================================================================
-# AUTENTICARSE EN TABLEAU
-# ============================================================================
- 
+
+
 def autenticar_tableau(config):
-    """Autentica en Tableau Server/Cloud"""
+    """Autentica en Tableau Server"""
     try:
         logger.info("[AUTENTICANDO] Tableau...")
         
@@ -335,87 +310,58 @@ def autenticar_tableau(config):
         return server
         
     except Exception as e:
-        logger.error("[ERROR] Error al autenticar en Tableau: %s", e)
+        logger.error("[ERROR] Error al autenticar: %s", e)
+        logger.error("")
+        logger.error("Verifica en config.json:")
+        logger.error("- tableau_server: %s", config.get('tableau_server', 'NO DEFINIDO'))
+        logger.error("- tableau_token_name: %s", config.get('tableau_token_name', 'NO DEFINIDO'))
+        logger.error("- tableau_token: [oculto]")
+        logger.error("- tableau_site: %s", config.get('tableau_site', 'NO DEFINIDO'))
         sys.exit(1)
- 
-# ============================================================================
-# DESCARGAR WORKBOOK DE TABLEAU
-# ============================================================================
- 
+
+
 def descargar_workbook(server, workbook_luid, ruta_destino):
-    """
-    Descarga un workbook de Tableau usando su LUID
-    
-    Retorna:
-        True si se descargó correctamente, False en caso contrario
-    """
+    """Descarga UN workbook"""
     try:
         ruta_destino = Path(ruta_destino)
-        
-        # Crear el directorio padre si no existe
         ruta_destino.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Descargar SIN extensión .twbx
-        # Esto hace que TSC cree una carpeta "Dashboard" en lugar de "Dashboard.twbx"
-        ruta_temporal = str(ruta_destino.parent / ruta_destino.stem)
         
         logger.info("[DESCARGANDO] %s", workbook_luid)
         
-        # Descargar (TSC creará una carpeta con ese nombre)
+        ruta_temporal = str(ruta_destino.parent / ruta_destino.stem)
         server.workbooks.download(workbook_luid, filepath=ruta_temporal)
         
-        # Procesar el archivo descargado
         carpeta_descargada = Path(ruta_temporal)
         
         if carpeta_descargada.is_dir():
-            # TSC descargó en una carpeta, buscar el archivo .twbx dentro
             archivos_twbx = list(carpeta_descargada.glob('*.twbx'))
             
             if archivos_twbx:
-                # Mover el archivo .twbx a la ubicación final
-                archivo_original = archivos_twbx[0]
-                shutil.move(str(archivo_original), str(ruta_destino))
-                
-                # Limpiar la carpeta temporal
+                shutil.move(str(archivos_twbx[0]), str(ruta_destino))
                 try:
                     shutil.rmtree(carpeta_descargada)
                     logger.info("[OK] Descargado: %s", ruta_destino.name)
-                except Exception as e:
-                    logger.warning("[AVISO] Se descargó pero no se pudo limpiar carpeta temporal: %s", e)
-                
+                except:
+                    pass
                 return True
             else:
-                logger.error("[ERROR] No se encontró archivo .twbx en la carpeta descargada")
+                logger.error("[ERROR] No se encontró .twbx")
                 return False
         else:
-            # En versiones nuevas de TSC, puede descargar directamente sin crear carpeta
             if ruta_destino.exists():
                 logger.info("[OK] Descargado: %s", ruta_destino.name)
                 return True
             else:
-                logger.error("[ERROR] No se encontró archivo descargado")
+                logger.error("[ERROR] Archivo no encontrado")
                 return False
         
     except Exception as e:
-        logger.error("[ERROR] Error descargando %s: %s", workbook_luid, e)
+        logger.error("[ERROR] Error descargando: %s", e)
         return False
- 
-# ============================================================================
-# PROCESAR DESCARGAS
-# ============================================================================
- 
+
+
 def procesar_descargas(server, df, directorio_base):
-    """
-    Procesa las descargas de todos los workbooks
-    
-    Estructura:
-    directorio_base/
-    ├── RUTA_PROYECTO_1/
-    │   ├── Workbook1.twbx
-    │   └── Workbook2.twbx
-    ├── RUTA_PROYECTO_2/
-    │   └── Workbook3.twbx
-    """
+    """Descarga todos los workbooks"""
     
     estadisticas = {
         'total': len(df),
@@ -425,15 +371,14 @@ def procesar_descargas(server, df, directorio_base):
     }
     
     logger.info("="*60)
-    logger.info("INICIANDO DESCARGA DE %d WORKBOOKS", len(df))
+    logger.info("DESCARGANDO WORKBOOKS")
     logger.info("="*60)
     
     for contador, (idx, fila) in enumerate(df.iterrows(), 1):
-        workbook_luid = str(fila['WORKBOOK_LUID'])
-        workbook_nombre = str(fila['WORKBOOK'])
-        ruta_proyecto = str(fila['RUTA_PROYECTO'])
+        workbook_luid = str(fila['WORKBOOK_LUID']).strip()
+        workbook_nombre = str(fila['WORKBOOK']).strip()
+        ruta_proyecto = str(fila.get('RUTA_PROYECTO', 'default')).strip()
         
-        # Construir ruta local respetando estructura
         ruta_local = Path(directorio_base) / ruta_proyecto / f"{workbook_nombre}.twbx"
         
         logger.info("\n[%d/%d] %s", contador, len(df), workbook_nombre)
@@ -450,13 +395,10 @@ def procesar_descargas(server, df, directorio_base):
             estadisticas['errores'] += 1
     
     return estadisticas
- 
-# ============================================================================
-# SUBIR A GITHUB
-# ============================================================================
- 
+
+
 def subir_github(directorio_base, config):
-    """Hace git add, commit y push a GitHub"""
+    """Sube a GitHub"""
     
     try:
         logger.info("="*60)
@@ -465,14 +407,13 @@ def subir_github(directorio_base, config):
         
         os.chdir(directorio_base)
         
-        # Git add
         logger.info("[GIT] git add .")
         subprocess.run(['git', 'add', '.'], check=True, capture_output=True)
         
-        # Git commit
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         mensaje = f"Tableau Backup - {timestamp}"
-        logger.info("[GIT] git commit -m '%s'", mensaje)
+        
+        logger.info("[GIT] git commit")
         resultado = subprocess.run(
             ['git', 'commit', '-m', mensaje],
             check=True,
@@ -480,62 +421,57 @@ def subir_github(directorio_base, config):
             text=True
         )
         
-        if "nothing to commit" in resultado.stdout:
-            logger.info("[AVISO] No hay cambios que hacer commit")
+        if "nothing to commit" in resultado.stdout.lower():
+            logger.info("[AVISO] No hay cambios")
             return
         
-        # Git push
-        logger.info("[GIT] git push origin main")
+        logger.info("[GIT] git push")
         subprocess.run(['git', 'push', 'origin', 'main'], check=True, capture_output=True)
         
-        logger.info("[OK] Subido a GitHub correctamente")
+        logger.info("[OK] Subido a GitHub")
         
-    except subprocess.CalledProcessError as e:
-        logger.error("[ERROR] Error en Git: %s", e)
     except Exception as e:
-        logger.error("[ERROR] Error al subir a GitHub: %s", e)
- 
-# ============================================================================
-# REPORTE FINAL
-# ============================================================================
- 
+        logger.error("[ERROR] Error en GitHub: %s", e)
+
+
 def mostrar_reporte(estadisticas, tiempo_total):
-    """Muestra reporte de ejecución"""
+    """Muestra reporte final"""
     
     logger.info("="*60)
     logger.info("REPORTE FINAL")
     logger.info("="*60)
+    
     logger.info("Total de workbooks:    %d", estadisticas['total'])
     logger.info("Descargados:           %d [OK]", estadisticas['descargados'])
     logger.info("Errores:               %d [ERROR]", estadisticas['errores'])
     
     if estadisticas['total'] > 0:
-        tasa = (estadisticas['descargados']/estadisticas['total']*100)
+        tasa = (estadisticas['descargados'] / estadisticas['total'] * 100)
         logger.info("Tasa de exito:         %.1f%%", tasa)
     
     logger.info("Tiempo total:          %.2fs", tiempo_total)
     
     if estadisticas['tiempos']:
         promedio = sum(estadisticas['tiempos'].values()) / len(estadisticas['tiempos'])
-        logger.info("Tiempo promedio/workbook: %.2fs", promedio)
+        logger.info("Tiempo promedio/wb:    %.2fs", promedio)
     
     logger.info("="*60)
- 
+
+
 # ============================================================================
-# MAIN
+# FUNCIÓN PRINCIPAL
 # ============================================================================
- 
+
 def main():
-    """Función principal"""
+    """Orquestador principal"""
     
-    # Argumentos de línea de comandos
     parser = argparse.ArgumentParser(
-        description='Descarga workbooks Tableau (intenta Oracle, fallback a Excel)'
+        description='Descarga workbooks Tableau usando SQL PLUS + Python (v2 CORREGIDO)'
     )
     parser.add_argument(
         '--config',
         default='config.json',
-        help='Archivo de configuracion (default: config.json)'
+        help='Archivo de configuración (default: config.json)'
     )
     parser.add_argument(
         '--sin-github',
@@ -543,77 +479,80 @@ def main():
         help='Solo descargar, sin subir a GitHub'
     )
     parser.add_argument(
-        '--forzar-excel',
-        action='store_true',
-        help='Forzar uso de Excel (sin intentar Oracle)'
+        '--separador',
+        default=',',
+        help='Separador CSV (default: ,) - usar "\\t" para TSV o "|" para PIPE'
     )
     
     args = parser.parse_args()
     
     inicio_total = datetime.now()
     
-    # Cargar configuración
+    # Cargar y validar configuración
     logger.info("[CARGANDO] Configuración...")
     config = cargar_config(args.config)
     
-    # Obtener datos (Oracle con fallback a Excel)
+    directorio_base = config.get('directorio_descarga', './tableau_workbooks')
+    
+    # PASO 1: Ejecutar SQL PLUS
     logger.info("="*60)
-    logger.info("OBTENER DATOS")
+    logger.info("PASO 1: EJECUTAR SQL PLUS")
     logger.info("="*60)
     
-    if args.forzar_excel:
-        logger.info("[FORZANDO] Archivo de datos (--forzar-excel)")
-        directorio_script = Path(__file__).parent
-        
-        # Buscar archivo "prueba" con cualquier extensión
-        archivos_prueba = []
-        for archivo in directorio_script.glob('prueba*'):
-            if archivo.is_file():
-                archivos_prueba.append(archivo)
-        
-        if not archivos_prueba:
-            logger.error("[ERROR] No hay archivos 'prueba' en la carpeta del script")
-            sys.exit(1)
-        
-        archivo_datos = sorted(archivos_prueba, key=lambda x: x.stat().st_mtime, reverse=True)[0]
-        logger.info("[USANDO] %s", archivo_datos.name)
-        df = leer_archivo_datos(str(archivo_datos))
-        fuente_datos = 'archivo_datos'
-    else:
-        # Intenta Oracle, fallback a archivo de datos
-        df, fuente_datos = obtener_datos_inteligente(config)
+    comando = config['sqlplus_comando']
+    timeout = config.get('timeout_sqlplus', 15)
     
-    # Autenticar en Tableau
+    if not ejecutar_sqlplus(comando, timeout):
+        logger.error("[FATAL] No se pudo ejecutar SQL PLUS")
+        sys.exit(1)
+    
+    # PASO 2: Esperar archivo
     logger.info("="*60)
-    logger.info("AUTENTICAR EN TABLEAU")
+    logger.info("PASO 2: ESPERAR ARCHIVO")
     logger.info("="*60)
+    
+    archivo_lista = config['archivo_lista_workbooks']
+    
+    if not esperar_archivo(archivo_lista, timeout):
+        logger.error("[FATAL] El archivo no se generó")
+        sys.exit(1)
+    
+    # PASO 3: Parsear archivo
+    logger.info("="*60)
+    logger.info("PASO 3: PARSEAR ARCHIVO (CSV/TSV/PIPE)")
+    logger.info("="*60)
+    
+    df = parsear_lista_workbooks(archivo_lista, args.separador)
+    
+    if df is None or len(df) == 0:
+        logger.error("[FATAL] No se pudo parsear el archivo")
+        sys.exit(1)
+    
+    # PASO 4: Limpiar directorio
+    limpiar_directorio(directorio_base)
+    
+    # PASO 5: Autenticar Tableau
+    logger.info("="*60)
+    logger.info("PASO 5: AUTENTICAR TABLEAU")
+    logger.info("="*60)
+    
     server = autenticar_tableau(config)
     
-    # Crear directorio base
-    directorio_base = config.get('directorio_descarga', './tableau_workbooks')
-    Path(directorio_base).mkdir(parents=True, exist_ok=True)
-    logger.info("\n[DIRECTORIO] %s", directorio_base)
-    logger.info("[FUENTE] %s", fuente_datos.upper())
-    
-    # Descargar workbooks
-    logger.info("="*60)
-    logger.info("DESCARGANDO WORKBOOKS")
-    logger.info("="*60)
+    # PASO 6: Descargar workbooks
     estadisticas = procesar_descargas(server, df, directorio_base)
     
-    # Subir a GitHub (opcional)
+    # PASO 7: Subir GitHub
     if not args.sin_github and config.get('github_enabled', True):
-        logger.info("="*60)
-        logger.info("SUBIENDO A GITHUB")
-        logger.info("="*60)
         subir_github(directorio_base, config)
+    else:
+        logger.info("[AVISO] GitHub deshabilitado")
     
-    # Cerrar sesión Tableau
     server.auth.sign_out()
     
-    # Reporte final
+    # PASO 8: Reporte
     tiempo_total = (datetime.now() - inicio_total).total_seconds()
     mostrar_reporte(estadisticas, tiempo_total)
- 
+
+
 if __name__ == '__main__':
     main()
