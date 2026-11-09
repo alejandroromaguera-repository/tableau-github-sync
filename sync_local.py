@@ -1,160 +1,123 @@
-#!/usr/bin/env python3
-"""
-Script para sincronizar la carpeta workbooks/ con GitHub automáticamente.
-Monitorea cambios locales y hace push a GitHub.
-"""
 
-import os
-import sys
-import time
-import shutil
-import logging
-from datetime import datetime
-from pathlib import Path
-import git
-
-# Configurar logging para visualización en terminal
-logging.basicConfig(
-    level=logging.INFO, # Mostrar todos los mensajes de INFO en adelante
-    format="%(asctime)s - %(levelname)s - %(message)s" # Formato: [fecha-hora] - [tipo] - [mensaje]
-)
-
-logger = logging.getLogger(__name__) # Crear un "logger" para escribir mensajes
-
-def main():
-    """Función principal"""
-
-    # Obtener y definir rutas del repositorio
-    repo_path = os.getcwd() # Ruta actual del repositorio Git
-    source_path = r"C:\Users\alejandro.romaguera\Documents\Tableau Workbooks" # Carpeta a monitorear
-    github_workbooks = os.path.join(repo_path, "workbooks") # Carpeta destino en GitHub
-
-    logger.info("=" * 60)
-    logger.info("Monitor de Workbooks - Tableau <-> GitHub (con subcarpetas)")
-    logger.info("=" * 60)
-    logger.info(f"Carpeta monitoreada: {source_path}")
-    logger.info(f"Repositorio: {repo_path}")
-    logger.info("Destino GitHub: workbooks/<subcarpeta>/")
-    logger.info("")
-    logger.info("Estructura soportada:")
-    logger.info("Documentos/Tableau Workbooks/")
-    logger.info(" |--- Stangest")
-    logger.info("")
-
-    # Verificar que Git está configurado
-    try:
-	# Intentar abrir el repositorio Git
-        repo = git.Repo(repo_path)
-        logger.info("Repositorio Git encontrado")
-    except Exception as e:
-        logger.error("Error: No es un repositorio Git válido")
-        logger.error(e)
-        sys.exit(1)
-
-    # Verificar que la carpeta origen existe
-    if not Path(source_path).exists():
-        logger.error(f"La carpeta NO EXISTE: {source_path}")
-        sys.exit(1)
-
-    logger.info(f"Carpeta encontrada: {source_path}\n")
-
-    # Rastrear archivos procesados, evitando el mismo archivo varias veces
-    processed_files = set()
-
-    logger.info("Esperando cambios...")
-    logger.info("Presiona Ctrl+C para detener")
-    logger.info("=" * 60)
-
-    # Monitorear Archivos
-    try:
-        while True: # Repetir hasta presionar (Ctrl+C)
-
-            # Buscar todos los archivos .twbx
-            for root, dirs, files in os.walk(source_path):
-
-                for file in files:
-
-                    if not file.endswith(".twbx"):
-                        continue
-
-		    # Crear ruta completa del archivo
-                    file_path = os.path.join(root, file)
-
-                    # Si ya lo procesamos, continuar
-                    if file_path in processed_files:
-                        continue
-
-                    # Nuevo archivo encontrado
-                    rel_path = os.path.relpath(file_path, source_path)
-                    logger.info(f"Archivo encontrado: {rel_path}")
-
-                    try:
-                        # Esperar a que se descargue el archivo
-                        time.sleep(2)
-
-                        # Determinar ruta en GitHub
-                        subfolder = os.path.dirname(rel_path)
-
-                        if subfolder and subfolder != ".":
-                            github_path = os.path.join(
-                                "workbooks",
-                                subfolder,
-                                file
-                            )
-                        else:
-                            github_path = os.path.join(
-                                "workbooks",
-                                file
-                            )
-
-			# Convertir barras de Windows a barras de Git
-                        github_path = github_path.replace("\\", "/")
-
-                        # Crear directorio destino
-                        github_dir = os.path.dirname(
-                            os.path.join(repo_path, github_path)
-                        )
-                        os.makedirs(github_dir, exist_ok=True)
-
-                        # Copiar archivo al repositorio
-                        dest_file = os.path.join(repo_path, github_path)
-                        shutil.copy2(file_path, dest_file)
-
-                        # Agregar y commitear a  Git
-                        repo.index.add([github_path])
-
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        commit_message = f"[NUEVO] {rel_path} - {timestamp}"
-
-                        repo.index.commit(commit_message)
-                        logger.info(f"Commit: {commit_message}")
-
-                        # Subir a GitHub
-                        try:
-                            origin = repo.remote("origin") # Obtener la conexion a GitHub
-                            origin.push() # Enviar cambios a GitHub
-                            logger.info("Push a GitHub exitoso\n")
-
-                        except Exception as e:
-                            logger.error(f"Error en el push: {e}\n")
-
-                        # Marcar como procesado
-                        processed_files.add(file_path)
-
-                    except Exception as e:
-                        logger.error(
-                            f"Error procesando {rel_path}: {e}\n"
-                        )
-                        processed_files.add(file_path)
-
-            # Esperar 5 segundos antes de escanear la carpeta de nuevo
-            time.sleep(5)
-
-    except KeyboardInterrupt:
-        logger.info("\n\nDeteniendo monitor...")
-
-    logger.info("Monitor detenido")
-
-
-if __name__ == "__main__":
-    main()
+	MERGE 
+  INTO CLABS_ANL_PRO.ANL_M_IFC_AGENTES_HIST ANL_M_IFC_AGENTES_HIST
+  USING
+  (
+SELECT 
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.AGENTE_WID
+ELSE ANL_M_IFC_AGENTES_HIST1.AGENTE_WID
+END AS AGENTE_WID ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.NOMBRE_AGENTE
+ELSE ANL_M_IFC_AGENTES_HIST1.NOMBRE_AGENTE
+END AS NOMBRE_AGENTE ,
+  NVL((NVL(ANL_M_IFC_AGENTES.DIVISION,'-')),ANL_M_IFC_AGENTES_HIST1.DIVISION) AS DIVISION ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.CD_DELEGADO_JDE
+ELSE ANL_M_IFC_AGENTES_HIST1.CD_DELEGADO_JDE
+END AS CD_DELEGADO_JDE ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.LOGIN
+ELSE ANL_M_IFC_AGENTES_HIST1.LOGIN
+END AS LOGIN ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.NOMBRE_GERENTE
+ELSE ANL_M_IFC_AGENTES_HIST1.NOMBRE_GERENTE
+END AS NOMBRE_GERENTE ,
+  NVL((NVL(ANL_M_IFC_AGENTES.ZONA,'-')),ANL_M_IFC_AGENTES_HIST1.ZONA) AS ZONA ,
+  NVL((NVL(ANL_M_IFC_AGENTES.ESTADO,'-')),ANL_M_IFC_AGENTES_HIST1.ESTADO) AS ESTADO ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.POSTN_TOTAL
+ELSE ANL_M_IFC_AGENTES_HIST1.POSTN_TOTAL
+END AS POSTN_TOTAL ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.TIPO_RED
+ELSE ANL_M_IFC_AGENTES_HIST1.TIPO_RED
+END AS TIPO_RED ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN ANL_M_IFC_AGENTES.VISUALIZACION
+ELSE ANL_M_IFC_AGENTES_HIST1.VISUALIZACION
+END AS VISUALIZACION ,
+  NVL(ANL_M_IFC_AGENTES.DATE_UPD,ANL_M_IFC_AGENTES_HIST1.DATE_UPD) AS DATE_UPD ,
+  NVL(ANL_M_IFC_AGENTES.ID_SF_USER,ANL_M_IFC_AGENTES_HIST1.ID_SF_USER) AS ID_SF_USER ,
+  NVL((NVL(ANL_M_IFC_AGENTES.CD_GERENTE_JDE,'-')),ANL_M_IFC_AGENTES_HIST1.CD_GERENTE_JDE) AS CD_GERENTE_JDE ,
+  CASE WHEN ANL_M_IFC_AGENTES_HIST1.ID_SF_USER IS NULL
+THEN SYSDATE
+ELSE ANL_M_IFC_AGENTES_HIST1.FECHA_INICIO
+END AS FECHA_INICIO ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NULL
+AND ANL_M_IFC_AGENTES_HIST1.FECHA_FIN = TO_DATE('31-12-9999','DD-MM-YYYY')
+THEN SYSDATE
+WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NOT NULL
+THEN TO_DATE('31-12-9999','DD-MM-YYYY')
+ELSE ANL_M_IFC_AGENTES_HIST1.FECHA_FIN
+END AS FECHA_FIN ,
+  CASE WHEN ANL_M_IFC_AGENTES.ID_SF_USER IS NULL THEN 0 ELSE 1 END AS FLAG_ACTIVO   
+FROM 
+  CLABS_ANL_PRO.ANL_M_IFC_AGENTES ANL_M_IFC_AGENTES  FULL OUTER JOIN  CLABS_ANL_PRO.ANL_M_IFC_AGENTES_HIST ANL_M_IFC_AGENTES_HIST1  
+    ON  ANL_M_IFC_AGENTES.ID_SF_USER = ANL_M_IFC_AGENTES_HIST1.ID_SF_USER
+AND (NVL(ANL_M_IFC_AGENTES.ESTADO,'-')) = ANL_M_IFC_AGENTES_HIST1.ESTADO
+AND (NVL(ANL_M_IFC_AGENTES.ZONA,'-')) = ANL_M_IFC_AGENTES_HIST1.ZONA
+AND (NVL(ANL_M_IFC_AGENTES.DIVISION,'-')) = ANL_M_IFC_AGENTES_HIST1.DIVISION
+AND (NVL(ANL_M_IFC_AGENTES.CD_GERENTE_JDE,'-')) = ANL_M_IFC_AGENTES_HIST1.CD_GERENTE_JDE
+AND TO_DATE('31-12-9999','DD-MM-YYYY') = ANL_M_IFC_AGENTES_HIST1.FECHA_FIN
+  ) MERGE_SUBQUERY
+  ON
+  (
+    ANL_M_IFC_AGENTES_HIST.DIVISION = MERGE_SUBQUERY.DIVISION AND   ANL_M_IFC_AGENTES_HIST.ZONA = MERGE_SUBQUERY.ZONA AND   ANL_M_IFC_AGENTES_HIST.ESTADO = MERGE_SUBQUERY.ESTADO AND   ANL_M_IFC_AGENTES_HIST.ID_SF_USER = MERGE_SUBQUERY.ID_SF_USER AND   ANL_M_IFC_AGENTES_HIST.CD_GERENTE_JDE = MERGE_SUBQUERY.CD_GERENTE_JDE AND   ANL_M_IFC_AGENTES_HIST.FECHA_INICIO = MERGE_SUBQUERY.FECHA_INICIO 
+   )
+  WHEN NOT MATCHED THEN
+    INSERT
+    (
+      AGENTE_WID ,
+      NOMBRE_AGENTE ,
+      DIVISION ,
+      CD_DELEGADO_JDE ,
+      LOGIN ,
+      NOMBRE_GERENTE ,
+      ZONA ,
+      ESTADO ,
+      POSTN_TOTAL ,
+      TIPO_RED ,
+      VISUALIZACION ,
+      DATE_UPD ,
+      ID_SF_USER ,
+      CD_GERENTE_JDE ,
+      FECHA_INICIO ,
+      FECHA_FIN ,
+      FLAG_ACTIVO 
+    )
+    VALUES
+    (
+      MERGE_SUBQUERY.AGENTE_WID ,
+      MERGE_SUBQUERY.NOMBRE_AGENTE ,
+      MERGE_SUBQUERY.DIVISION ,
+      MERGE_SUBQUERY.CD_DELEGADO_JDE ,
+      MERGE_SUBQUERY.LOGIN ,
+      MERGE_SUBQUERY.NOMBRE_GERENTE ,
+      MERGE_SUBQUERY.ZONA ,
+      MERGE_SUBQUERY.ESTADO ,
+      MERGE_SUBQUERY.POSTN_TOTAL ,
+      MERGE_SUBQUERY.TIPO_RED ,
+      MERGE_SUBQUERY.VISUALIZACION ,
+      MERGE_SUBQUERY.DATE_UPD ,
+      MERGE_SUBQUERY.ID_SF_USER ,
+      MERGE_SUBQUERY.CD_GERENTE_JDE ,
+      MERGE_SUBQUERY.FECHA_INICIO ,
+      MERGE_SUBQUERY.FECHA_FIN ,
+      MERGE_SUBQUERY.FLAG_ACTIVO 
+    )
+  WHEN MATCHED THEN
+    UPDATE SET
+      AGENTE_WID = MERGE_SUBQUERY.AGENTE_WID ,
+      NOMBRE_AGENTE = MERGE_SUBQUERY.NOMBRE_AGENTE ,
+      CD_DELEGADO_JDE = MERGE_SUBQUERY.CD_DELEGADO_JDE ,
+      LOGIN = MERGE_SUBQUERY.LOGIN ,
+      NOMBRE_GERENTE = MERGE_SUBQUERY.NOMBRE_GERENTE ,
+      POSTN_TOTAL = MERGE_SUBQUERY.POSTN_TOTAL ,
+      TIPO_RED = MERGE_SUBQUERY.TIPO_RED ,
+      VISUALIZACION = MERGE_SUBQUERY.VISUALIZACION ,
+      DATE_UPD = MERGE_SUBQUERY.DATE_UPD ,
+      FECHA_FIN = MERGE_SUBQUERY.FECHA_FIN ,
+      FLAG_ACTIVO = MERGE_SUBQUERY.FLAG_ACTIVO    
